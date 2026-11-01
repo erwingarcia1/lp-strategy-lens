@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LP Strategy Lens</title>
+<meta name="description" content="Break down any Solana wallet's Meteora DLMM liquidity strategy and score it against the edges shared by top LPers.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+/* Layout: one column instrument panel — wallet bar, fingerprint, charts, then the position ledger. */
+:root {
+  --bg: #f2f4f6; --panel: #ffffff; --ink: #142029; --muted: #5b6874; --line: #d9dfe5;
+  --accent: #3d4fd6; --accent-soft: #e4e7fb; --gain: #16834f; --loss: #c2453b; --open: #b7791f;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f151b; --panel: #161e26; --ink: #e6ebf0; --muted: #94a1ad; --line: #2a3540;
+  --accent: #8e9bff; --accent-soft: #222a4a; --gain: #4cc28a; --loss: #f07a6f; --open: #e2a94c; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f151b; --panel: #161e26; --ink: #e6ebf0; --muted: #94a1ad; --line: #2a3540;
+  --accent: #8e9bff; --accent-soft: #222a4a; --gain: #4cc28a; --loss: #f07a6f; --open: #e2a94c; color-scheme: dark }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body); }
+[hidden] { display: none !important; }
+footer { color: var(--muted); font-size: 12px; max-width: 80ch; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 28px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 22px; }
+h1, h2 { font-family: var(--display); text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.01em; }
+h2 { font-size: 20px; }
+.lede { color: var(--muted); margin: 6px 0 0; max-width: 68ch; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.field { display: grid; gap: 4px; flex: 1 1 340px; min-width: 0; }
+.field.small { flex: 0 1 150px; }
+input { font: 14px var(--mono); padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); width: 100%; box-sizing: border-box; }
+input:focus-visible, button:focus-visible, th:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button { font: 600 14px var(--body); padding: 10px 18px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--panel); cursor: pointer; }
+button:disabled { opacity: 0.55; cursor: progress; }
+button.ghost { background: transparent; color: var(--accent); padding: 4px 10px; font-size: 13px; }
+.recent { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
+.status { width: 100%; font-size: 13px; color: var(--muted); min-height: 1.4em; }
+.status.err { color: var(--loss); }
+.progress { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; width: 100%; }
+.progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.25s; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.tile { background: var(--panel); padding: 14px 16px; display: grid; gap: 2px; }
+.tile b { font: 600 24px var(--display); font-variant-numeric: tabular-nums; }
+.tile small { color: var(--muted); font-size: 12px; }
+.pos { color: var(--gain); } .neg { color: var(--loss); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 22px; }
+.finger { margin: 0; padding-left: 18px; display: grid; gap: 6px; max-width: 80ch; }
+.chart { position: relative; min-width: 0; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--muted); font: 11px var(--mono); }
+.chart .grid line { stroke: var(--line); }
+.chart .domain { stroke: var(--line); }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font: 12px/1.4 var(--body); padding: 6px 9px; border-radius: 6px; white-space: nowrap; z-index: 2; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; }
+th[aria-sort="ascending"]::after { content: " ▲"; } th[aria-sort="descending"]::after { content: " ▼"; }
+td.mono { font-family: var(--mono); font-size: 12px; }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+.rng { display: inline-block; position: relative; width: 90px; height: 8px; background: var(--line); border-radius: 4px; vertical-align: middle; }
+.rng > i { position: absolute; top: -3px; width: 3px; height: 14px; border-radius: 2px; background: var(--ink); }
+.rng.out > i { background: var(--loss); }
+.empty { text-align: center; color: var(--muted); padding: 40px 16px; border: 1px dashed var(--line); border-radius: 10px; }
+.empty b { color: var(--ink); font-family: var(--display); font-size: 18px; display: block; margin-bottom: 4px; }
+.note { font-size: 12px; color: var(--muted); }
+a { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .progress > i { transition: none; } }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>LP Strategy Lens</h1>
+    <p class="lede">Type any Solana wallet to break down how it provides liquidity on Meteora DLMM, then check it against the edges the top 10 LPers on LP Agent share: when they enter, what they skip, how big they go and how fast they leave.</p>
+  </header>
+
+  <form class="bar" id="form" autocomplete="off">
+    <div class="field">
+      <label class="label" for="wallet">Wallet address</label>
+      <input id="wallet" spellcheck="false" placeholder="e.g. 7unSdaTskNfQnS4hro7BTBF8Vf4F5mRP7iiymk33AiLx" value="7unSdaTskNfQnS4hro7BTBF8Vf4F5mRP7iiymk33AiLx">
+    </div>
+    <div class="field small">
+      <label class="label" for="capital">Your capital (USD)</label>
+      <input id="capital" inputmode="decimal" value="450">
+    </div>
+    <div class="field small">
+      <label class="label" for="maxpools">Pools to scan</label>
+      <input id="maxpools" inputmode="numeric" value="100">
+    </div>
+    <button id="go" type="submit">Analyze</button>
+    <div class="recent" id="toplps"><span class="label">Top LPers</span></div>
+    <div class="recent" id="recent" hidden><span class="label">Recent</span></div>
+    <div class="progress" id="progress" hidden><i></i></div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </form>
+
+  <div id="out">
+    <div class="empty" id="empty">
+      <b>No wallet analyzed yet</b>
+      Press Analyze to study the wallet above, or paste another one. It reads Meteora's public data straight from your browser; a big wallet takes a minute or so.
+    </div>
+  </div>
+  <footer>Data from Meteora's public DLMM data service, read live in your browser. Edge research and top-LPer benchmarks measured on 2026-11-01 from the top 10 wallets on LP Agent's Smart LP leaderboard. Past results don't guarantee future returns; this is research, not financial advice.</footer>
+</div>
+
+<script>
+(function () {
+  const API = "https://dlmm.datapi.meteora.ag";
+  const $ = (s) => document.querySelector(s);
+  const form = $("#form"), walletIn = $("#wallet"), capIn = $("#capital"), maxIn = $("#maxpools"), goBtn = $("#go");
+  const statusEl = $("#status"), progEl = $("#progress"), out = $("#out");
+  let current = null;
+
+  const store = {
+    get(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  };
+
+
+  // ---------- formatting ----------
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  function usd(v, signed) {
+    const a = Math.abs(v), s = v < 0 ? "−" : signed && v > 0 ? "+" : "";
+    const body = a >= 1e6 ? (a / 1e6).toFixed(2) + "M" : a >= 1e4 ? (a / 1e3).toFixed(1) + "k" : a >= 100 ? a.toFixed(0) : a.toFixed(2);
+    return s + "$" + body;
+  }
+  const pct = (v, d = 0) => (Number.isFinite(v) ? v.toFixed(d) + "%" : "—");
+  function hrs(h) {
+    if (!Number.isFinite(h)) return "—";
+    if (h < 1) return Math.max(1, Math.round(h * 60)) + "m";
+    if (h < 48) return h.toFixed(h < 10 ? 1 : 0) + "h";
+    return (h / 24).toFixed(h < 240 ? 1 : 0) + "d";
+  }
+  const day = (t) => new Date(t * 1000).toISOString().slice(0, 10);
+  const cls = (v) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
+  function median(a) { const s = a.filter(Number.isFinite).sort((x, y) => x - y); if (!s.length) return NaN; const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+  const sum = (a, f) => a.reduce((t, x) => t + f(x), 0);
+  function setStatus(msg, err) { statusEl.textContent = msg; statusEl.classList.toggle("err", !!err); }
+  function setProgress(f) { progEl.hidden = f == null; if (f != null) progEl.firstElementChild.style.width = Math.round(f * 100) + "%"; }
+
+  // ---------- reading Meteora's public data ----------
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function getJson(path) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const res = await fetch(API + path);
+        if (res.ok) return await res.json();
+        if (res.status === 404) return null;
+      } catch {}
+      await wait(800 * 2 ** attempt);
+    }
+    throw { code: "bad_page", message: "Meteora's data service didn't answer for " + path.split("?")[0] + ". It may be busy or rate-limiting; try again in a minute." };
+  }
+  async function mapLimit(xs, n, f) { let i = 0; await Promise.all(Array.from({ length: n }, async () => { while (i < xs.length) { const k = i++; await f(xs[k], k); } })); }
+  async function allPages(path, key) {
+    const items = []; let first = null;
+    for (let page = 1; page < 40; page++) {
+      const body = await getJson(path + (path.includes("?") ? "&" : "?") + "page=" + page + "&page_size=50");
+      if (!body) break;
+      first = first || body; items.push(...(body[key] || []));
+      if (!body.hasNext) break;
+    }
+    return { first, items };
+  }
+
+  function explain(e) {
+    const tag = e?.code ? " (" + e.code + ")" : "";
+    return explainText(e) + tag;
+  }
+  function explainText(e) {
+    if (e?.code === "bad_page") return e.message;
+    return "Something stopped the analysis" + (e?.message ? ": " + e.message : ".");
+  }
+
+  // ---------- analysis ----------
+  const QUOTES = { So11111111111111111111111111111111111111112: "SOL", EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: "USDC", Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: "USDT" };
+
+  async function analyze(wallet, maxPools) {
+    setProgress(0.02); setStatus("Reading the wallet's totals…");
+    const total = await getJson("/portfolio/total?user=" + wallet);
+    setProgress(0.06); setStatus("Reading open pools…");
+    const open = await allPages("/portfolio/open?user=" + wallet, "pools");
+    setProgress(0.1); setStatus("Reading closed pools…");
+    const closed = await allPages("/portfolio?user=" + wallet, "pools");
+    // Open pools always, then the most recently closed ones, up to the scan limit.
+    const openSet = new Set(open.items.map((p) => p.poolAddress));
+    const recent = closed.items.filter((p) => !openSet.has(p.poolAddress)).sort((a, b) => num(b.lastClosedAt) - num(a.lastClosedAt));
+    const list = [...open.items, ...recent.slice(0, Math.max(0, maxPools - open.items.length))], positions = [];
+    const now = Date.now() / 1000;
+    let done = 0;
+    await mapLimit(list, 4, async (pool) => {
+      const { first, items } = await allPages("/positions/" + pool.poolAddress + "/pnl?user=" + wallet, "positions");
+      const meta = (await getJson("/pools/" + pool.poolAddress)) || {};
+      done++; setStatus("Read " + done + " of " + list.length + " pools…"); setProgress(0.12 + 0.86 * (done / Math.max(1, list.length)));
+      const pair = meta.name || pool.tokenX + "-" + pool.tokenY;
+      const qMint = meta.token_y?.address || pool.tokenYMint, bMint = meta.token_x?.address || pool.tokenXMint;
+      const quote = QUOTES[qMint] || (QUOTES[bMint] ? "Inverted" : "Other");
+      for (const p of items) {
+        const dep = num(p.allTimeDeposits?.total?.usd), xU = num(p.allTimeDeposits?.tokenX?.usd);
+        const minP = num(p.minPrice), maxP = num(p.maxPrice), px = num(p.poolActivePrice);
+        const end = p.isClosed ? num(p.closedAt) : now, opened = num(p.createdAt);
+        positions.push({
+          id: p.positionAddress, pool: pool.poolAddress, pair, quote, open: !p.isClosed,
+          binStep: num(meta.pool_config?.bin_step ?? pool.binStep), baseFee: num(meta.pool_config?.base_fee_pct ?? pool.baseFee),
+          poolAgeH: meta.created_at ? (opened * 1000 - meta.created_at) / 3.6e6 : NaN, mcap: num(meta.token_x?.market_cap) || NaN,
+          openedAt: opened, closedAt: p.isClosed ? num(p.closedAt) : null, holdH: (end - opened) / 3600, hourUtc: new Date(opened * 1000).getUTCHours(),
+          dep, fees: num(p.allTimeFees?.total?.usd), pnl: num(p.pnlUsd), pnlPct: num(p.pnlPctChange),
+          minP, maxP, widthPct: minP > 0 ? (maxP / minP - 1) * 100 : NaN, bins: num(p.upperBinId) - num(p.lowerBinId) + 1,
+          xShare: dep > 0 ? xU / dep : NaN, outOfRange: !!p.isOutOfRange, price: px,
+        });
+      }
+    });
+    markReentries(positions);
+    setProgress(1);
+    return {
+      wallet, at: new Date().toISOString(), positions, scannedPools: list.length, totalPools: openSet.size + recent.length,
+      totals: {
+        realized: num(total.totalPnlUsd), closedCount: num(total.totalClosedPositions),
+        openValue: num(open.first?.total?.balances), openPnl: num(open.first?.total?.pnl), unclaimed: num(open.first?.total?.unclaimedFees),
+      },
+    };
+  }
+
+  // A position counts as re-entered when the next one in the same pool opens within 2h of it closing.
+  function markReentries(P) {
+    const byPool = d3.group(P, (p) => p.pool);
+    for (const ps of byPool.values()) {
+      ps.sort((a, b) => a.openedAt - b.openedAt);
+      ps.forEach((p, i) => { p.reentered = p.closedAt != null && ps.slice(i + 1).some((q) => q.openedAt >= p.closedAt - 60 && q.openedAt - p.closedAt <= 7200); });
+    }
+  }
+
+  const side = (x) => (!Number.isFinite(x) ? "Unknown" : x >= 0.9 ? "Token only" : x <= 0.1 ? "Quote only" : "Both sides");
+
+  // Top LPers measured on 2026-11-01 from LP Agent's Smart LP leaderboard (all-time PnL, active in 7 days),
+  // each wallet's most recent 250 pools read from Meteora's data. Fixed reference, not live.
+  const BENCH = {"asOf":"2026-11-01","wallets":[{"wallet":"7unSdaTskNfQnS4hro7BTBF8Vf4F5mRP7iiymk33AiLx","allTimePnl":3897,"winRate":71.3,"returnOnDeposits":0.12,"feeYield":2.77,"priceComponent":-2.65,"profitFactor":1.07,"medHoldH":0.029,"freshPoolPct":84.3,"solQuotePct":100,"quoteOnlyPct":98.1,"medBinStep":100,"medBaseFee":2,"reentryPct":66,"perDay":24.7,"medDep":344},{"wallet":"BcVijrJa5figyZUGY9yp6JaZJnrh58mnmvdkfTtg89tF","allTimePnl":2974,"winRate":75.8,"returnOnDeposits":0.38,"feeYield":1.42,"priceComponent":-1.04,"profitFactor":1.56,"medHoldH":0.222,"freshPoolPct":66.4,"solQuotePct":85,"quoteOnlyPct":68.2,"medBinStep":100,"medBaseFee":2,"reentryPct":61.8,"perDay":8.7,"medDep":117},{"wallet":"F8URdNcLEeQPEkB1WVu9ZFgLRrx3yyAyFNEue3wxotY5","allTimePnl":2520,"winRate":71.7,"returnOnDeposits":0.43,"feeYield":1.33,"priceComponent":-0.9,"profitFactor":1.86,"medHoldH":0.281,"freshPoolPct":60.4,"solQuotePct":100,"quoteOnlyPct":98.3,"medBinStep":100,"medBaseFee":2,"reentryPct":60.4,"perDay":1.8,"medDep":933},{"wallet":"sXaCGaokmQeSWCMQLctbmcnh4bUAR45P9NtjZyV9D5C","allTimePnl":2343,"winRate":74,"returnOnDeposits":0.28,"feeYield":0.98,"priceComponent":-0.7,"profitFactor":1.73,"medHoldH":0.176,"freshPoolPct":74.5,"solQuotePct":99.9,"quoteOnlyPct":99.9,"medBinStep":100,"medBaseFee":2,"reentryPct":81.2,"perDay":17.6,"medDep":474},{"wallet":"3pJapZkd4nHWNf2ef3hUR3qzTSNiBMrDnq5wEtrZFqid","allTimePnl":2089,"winRate":75,"returnOnDeposits":0.21,"feeYield":0.87,"priceComponent":-0.65,"profitFactor":1.51,"medHoldH":0.096,"freshPoolPct":61,"solQuotePct":95.3,"quoteOnlyPct":95.3,"medBinStep":100,"medBaseFee":1,"reentryPct":57.3,"perDay":8.4,"medDep":1901},{"wallet":"3bevQTx47aD5wcqepUQwb2UAWV6z1XKVxkBfr3z27S5Z","allTimePnl":2060,"winRate":72.8,"returnOnDeposits":0.35,"feeYield":1.38,"priceComponent":-1.03,"profitFactor":1.59,"medHoldH":0.059,"freshPoolPct":80.6,"solQuotePct":77.7,"quoteOnlyPct":95.9,"medBinStep":100,"medBaseFee":1.5,"reentryPct":68.9,"perDay":27.4,"medDep":780},{"wallet":"C5uRK3abg5hSfa27K5ZjT3gTmXdC48uBxpg1YLBZNsLB","allTimePnl":1699,"winRate":82.4,"returnOnDeposits":1.23,"feeYield":8.05,"priceComponent":-6.82,"profitFactor":1.26,"medHoldH":0.262,"freshPoolPct":97.8,"solQuotePct":100,"quoteOnlyPct":97.4,"medBinStep":125,"medBaseFee":2,"reentryPct":27.3,"perDay":5.9,"medDep":475},{"wallet":"HKPMA43XzW9HA4YyJ8crZbuoBujzXRe6YsN4xnR5DGWQ","allTimePnl":1574,"winRate":72.3,"returnOnDeposits":0.77,"feeYield":1.31,"priceComponent":-0.53,"profitFactor":4.82,"medHoldH":0.065,"freshPoolPct":86.9,"solQuotePct":99.5,"quoteOnlyPct":77,"medBinStep":100,"medBaseFee":1,"reentryPct":75.6,"perDay":17.1,"medDep":989},{"wallet":"EUWwzC883pUYZWSLx1kxjddPz7WAQMY1yxFz26bLfXs4","allTimePnl":1510,"winRate":79.7,"returnOnDeposits":1.42,"feeYield":2.77,"priceComponent":-1.35,"profitFactor":3.8,"medHoldH":0.16,"freshPoolPct":59.5,"solQuotePct":100,"quoteOnlyPct":100,"medBinStep":100,"medBaseFee":2,"reentryPct":85.5,"perDay":89.9,"medDep":1913},{"wallet":"CuHFvwUqxsTqcbeVLJjVLf9Pirr4RtBeGA4KXY6gGhik","allTimePnl":1380,"winRate":79.5,"returnOnDeposits":0.5,"feeYield":2.2,"priceComponent":-1.69,"profitFactor":1.57,"medHoldH":0.139,"freshPoolPct":93.4,"solQuotePct":99.6,"quoteOnlyPct":95.4,"medBinStep":100,"medBaseFee":2,"reentryPct":37.3,"perDay":1.9,"medDep":227}]};
+
+  function profile(d) {
+    const P = d.positions, C = P.filter((p) => !p.open && p.dep > 0);
+    const depC = sum(C, (p) => p.dep), wins = C.filter((p) => p.pnl > 0), losses = C.filter((p) => p.pnl < 0);
+    const share = (f) => (P.length ? (P.filter(f).length / P.length) * 100 : NaN);
+    const first = d3.min(P, (p) => p.openedAt), last = d3.max(P, (p) => p.openedAt);
+    return {
+      winRate: C.length ? (wins.length / C.length) * 100 : NaN,
+      returnOnDeposits: depC ? (sum(C, (p) => p.pnl) / depC) * 100 : NaN,
+      feeYield: depC ? (sum(C, (p) => p.fees) / depC) * 100 : NaN,
+      priceComponent: depC ? ((sum(C, (p) => p.pnl) - sum(C, (p) => p.fees)) / depC) * 100 : NaN,
+      profitFactor: losses.length ? sum(wins, (p) => p.pnl) / -sum(losses, (p) => p.pnl) : NaN,
+      medHoldH: median(C.map((p) => p.holdH)), medWidth: median(P.map((p) => p.widthPct)), medDep: median(P.map((p) => p.dep)),
+      perDay: P.length / Math.max(1, (last - first) / 86400),
+      freshPoolPct: share((p) => p.poolAgeH < 24), solQuotePct: share((p) => p.quote === "SOL"), quoteOnlyPct: share((p) => p.xShare <= 0.1),
+      medBinStep: median(P.map((p) => p.binStep)), medBaseFee: median(P.map((p) => p.baseFee)),
+      reentryPct: C.length ? (C.filter((p) => p.reentered).length / C.length) * 100 : NaN,
+    };
+  }
+
+  function playbook(pr, P) {
+    if (!P.length) return null;
+    if (pr.freshPoolPct >= 40 && pr.medHoldH < 2) return ["Launch farmer", "Enters brand-new pools within hours of launch, takes the fees from the opening rush and leaves within minutes to an hour."];
+    if (pr.medHoldH < 2) return ["Scalper", "Short positions in established pools, rotating often."];
+    const majors = P.filter((p) => p.mcap > 1e9 || p.quote !== "SOL").length / P.length;
+    if (pr.medWidth < 30 && majors > 0.6) return ["Majors grid", "Tight ranges on large tokens, re-centred as price moves."];
+    if (majors > 0.6) return ["Majors range trader", "Wide ranges on large tokens against USDC, held for hours to weeks, with large positions."];
+    if (pr.medWidth >= 30 && pr.medHoldH >= 24) return ["Wide fee farm", "Wide ranges held for days, earning mostly from fees."];
+    return ["Mixed", "No single dominant style."];
+  }
+
+  // [label, profile key, format, higher-is-better?]
+  const SCORE = [
+    ["Win rate", "winRate", (v) => pct(v), true], ["Return on money deposited", "returnOnDeposits", (v) => pct(v, 2), true],
+    ["Fees earned per $ deposited", "feeYield", (v) => pct(v, 2), true], ["Price moves per $ deposited", "priceComponent", (v) => pct(v, 2), true],
+    ["Profit factor", "profitFactor", (v) => (Number.isFinite(v) ? v.toFixed(2) : "—"), true], ["Median hold", "medHoldH", hrs, null],
+    ["Entries in pools under 24h old", "freshPoolPct", (v) => pct(v), null], ["Paired against SOL", "solQuotePct", (v) => pct(v), null],
+    ["Deposit SOL/USDC only (below price)", "quoteOnlyPct", (v) => pct(v), null], ["Median bin step", "medBinStep", (v) => (Number.isFinite(v) ? String(Math.round(v)) : "—"), null],
+    ["Median base fee", "medBaseFee", (v) => pct(v, 2), null], ["Re-enters the same pool within 2h", "reentryPct", (v) => pct(v), null],
+    ["New positions a day", "perDay", (v) => (Number.isFinite(v) ? v.toFixed(1) : "—"), null], ["Median position size", "medDep", (v) => usd(v), null],
+  ];
+
+  function scorecard(d) {
+    const card = el("div", { class: "card", id: "scorecard" });
+    card.append(el("h2", {}, "Edge scorecard"));
+    if (!BENCH) { card.append(el("p", { class: "note" }, "Leaderboard benchmarks aren't loaded.")); return card; }
+    card.append(el("p", { class: "note" }, "This wallet next to the top " + BENCH.wallets.length + " LPers on LP Agent's leaderboard, measured " + BENCH.asOf + ". Green means better than their median on a results row."));
+    const pr = profile(d), wrap = el("div", { class: "scroll" }), t = el("table"), hr = el("tr");
+    for (const h of ["Measure", "This wallet", "Top LPers median", "Top LPers range"]) hr.append(el("th", { scope: "col" }, h));
+    const tb = el("tbody");
+    for (const [label, key, f, better] of SCORE) {
+      const vals = BENCH.wallets.map((w) => w[key]).filter(Number.isFinite), m = median(vals), v = pr[key];
+      const tr = el("tr"), td = el("td", {}, f(v));
+      if (better != null && Number.isFinite(v) && Number.isFinite(m)) td.className = (better ? v >= m : v <= m) ? "pos" : "neg";
+      tr.append(el("td", {}, label), td, el("td", {}, f(m)), el("td", {}, vals.length ? f(d3.min(vals)) + " – " + f(d3.max(vals)) : "—"));
+      tb.append(tr);
+    }
+    const th = el("thead"); th.append(hr); t.append(th, tb); wrap.append(t); card.append(wrap);
+    return card;
+  }
+
+  const EDGE_TESTS = [
+    ["Hold time", (p) => p.holdH, [["under 15m", 0.25], ["15m–1h", 1], ["1–4h", 4], ["4–24h", 24], ["1–7d", 168], ["over 7d", Infinity]]],
+    ["Pool age when entered", (p) => p.poolAgeH, [["under 6h", 6], ["6–24h", 24], ["1–7d", 168], ["7–30d", 720], ["over 30d", Infinity]]],
+    ["Range width", (p) => p.widthPct, [["under 5%", 5], ["5–15%", 15], ["15–40%", 40], ["40–100%", 100], ["over 100%", Infinity]]],
+    ["Deposit side", (p) => side(p.xShare), null],
+    ["Base fee", (p) => p.baseFee, [["under 0.3%", 0.3], ["0.3–1%", 1.01], ["1–2%", 2.01], ["2–5%", 5.01], ["over 5%", Infinity]]],
+    ["Re-entered within 2h", (p) => (p.reentered ? "Yes" : "No"), null],
+  ];
+
+  function edgeTests(P) {
+    const C = P.filter((p) => !p.open && p.dep > 0);
+    const card = el("div", { class: "card", id: "what-works" });
+    card.append(el("h2", {}, "What works for this wallet"), el("p", { class: "note" }, "Closed positions grouped each way. Return is total PnL divided by money deposited in that group. The best group with at least 5 positions is marked."));
+    const grid = el("div", { class: "two" });
+    for (const [label, f, edges] of EDGE_TESTS) {
+      const groups = new Map();
+      for (const p of C) {
+        const v = f(p); if (v == null || (typeof v === "number" && !Number.isFinite(v))) continue;
+        const k = edges ? (edges.find(([, hi]) => v < hi) || edges[edges.length - 1])[0] : v;
+        if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p);
+      }
+      const keys = edges ? edges.map((e) => e[0]).filter((k) => groups.has(k)) : [...groups.keys()];
+      if (!keys.length) continue;
+      const rows = keys.map((k) => { const ps = groups.get(k), dep = sum(ps, (p) => p.dep); return { k, n: ps.length, win: (ps.filter((p) => p.pnl > 0).length / ps.length) * 100, ret: dep ? (sum(ps, (p) => p.pnl) / dep) * 100 : NaN }; });
+      const best = rows.filter((r) => r.n >= 5).sort((a, b) => b.ret - a.ret)[0];
+      const box = el("div", { class: "scroll" }); box.append(el("div", { class: "label" }, label));
+      const t = el("table"), hr = el("tr"); for (const h of ["Group", "Positions", "Win rate", "Return"]) hr.append(el("th", { scope: "col" }, h));
+      const tb = el("tbody");
+      for (const r of rows) {
+        const tr = el("tr"), first = el("td", {}, r.k);
+        if (r === best) first.append(" ", el("span", { class: "chip" }, "best"));
+        const ret = el("td", { class: cls(r.ret) }, pct(r.ret, 2));
+        tr.append(first, el("td", {}, String(r.n)), el("td", {}, pct(r.win)), ret); tb.append(tr);
+      }
+      const th = el("thead"); th.append(hr); t.append(th, tb); box.append(t); grid.append(box);
+    }
+    card.append(grid);
+    return card;
+  }
+
+  // Edges that held for most of the top LPers and in both halves of the period. [title, evidence, follows(p), doesn't(p), what to compare]
+  const EDGES = [
+    ["Re-enter pools that are still working", "8 of 10 top LPers; +0.73% per position when the pool was re-entered within 2h, −0.36% when it wasn't. Read it as: keep working pools that still trade, drop dead ones at once.", (p) => p.reentered === true, (p) => p.reentered === false],
+    ["Skip micro-caps: tokens worth $1M–$100M", "9 of 10; +0.70% on $1M–$100M tokens against +0.26% under $1M, though micro-caps pay more fees.", (p) => p.mcap >= 1e6 && p.mcap < 1e8, (p) => p.mcap < 1e6],
+    ["Open between 00:00 and 12:00 UTC", "8 of 10; +0.70% against +0.20% for positions opened 12:00–24:00 UTC (8pm–8am US Eastern is the better half).", (p) => p.hourUtc < 12, (p) => p.hourUtc >= 12],
+    ["Size each position $100–$2k", "+0.46% at $100–$2k, −0.67% under $100 (costs eat it) and +0.01% over $2k (the pool can't absorb it).", (p) => p.dep >= 100 && p.dep < 2000, (p) => p.dep < 100 || p.dep >= 2000],
+    ["Get out fast: under 15 minutes, never 1–4h", "6 of 9; +0.50% under 15 minutes, −0.12% held 1–4h, the window where a launch token bleeds.", (p) => p.holdH < 0.25, (p) => p.holdH >= 1 && p.holdH < 4],
+    ["Keep ranges 15%–100% wide", "7 of 9; +0.55% against +0.29% for ranges wider than 100%.", (p) => p.widthPct >= 15 && p.widthPct < 100, (p) => p.widthPct >= 100],
+    ["Fresh pools are where the fees are", "Pools under 6h old paid 2.12% in fees per $ deposited against 0.86% after a day; net return was only slightly better (+0.40% vs +0.35%), so it needs the rules above.", (p) => p.poolAgeH < 6, (p) => p.poolAgeH >= 24, "fees"],
+  ];
+
+  function edgeChecklist(P) {
+    const C = P.filter((p) => !p.open && p.dep > 0);
+    const card = el("div", { class: "card", id: "edges" });
+    card.append(el("h2", {}, "Top LPer edges, checked on this wallet"));
+    card.append(el("p", { class: "note" }, "Found by testing 6,268 closed positions from the top 10 wallets on LP Agent's leaderboard (" + (BENCH ? BENCH.asOf : "2026-11-01") + "). Every one of them farms SOL-paired memecoin pools with SOL-only deposits, so these edges come from that style. The right-hand columns show whether this wallet follows each one and how it did when it did."));
+    const wrap = el("div", { class: "scroll" }), t = el("table"), hr = el("tr");
+    for (const h of ["Edge", "Evidence from top LPers", "This wallet follows it", "Return when it does", "When it doesn't"]) hr.append(el("th", { scope: "col" }, h));
+    const tb = el("tbody");
+    for (const [title, evidence, yes, no, metric] of EDGES) {
+      const A = C.filter(yes), B = C.filter(no);
+      const m = (ps) => { if (ps.length < 3) return "—"; const dep = sum(ps, (p) => p.dep) || 1; return pct((sum(ps, (p) => (metric === "fees" ? p.fees : p.pnl)) / dep) * 100, 2) + (metric === "fees" ? " fees" : "") + " (" + ps.length + ")"; };
+      const tr = el("tr"), ev = el("td", {}, evidence); ev.style.whiteSpace = "normal"; ev.style.minWidth = "260px"; ev.style.textAlign = "left";
+      const tt = el("td", {}, title); tt.style.whiteSpace = "normal"; tt.style.minWidth = "160px"; tt.style.fontWeight = "600";
+      tr.append(tt, ev, el("td", {}, C.length ? pct((A.length / C.length) * 100) : "—"), el("td", {}, m(A)), el("td", {}, m(B)));
+      tb.append(tr);
+    }
+    const th = el("thead"); th.append(hr); t.append(th, tb); wrap.append(t); card.append(wrap);
+    return card;
+  }
+
+  function renderTopLps() {
+    const box = $("#toplps");
+    if (!BENCH) { box.hidden = true; return; }
+    for (const w of BENCH.wallets) {
+      const b = el("button", { type: "button", class: "ghost", title: w.wallet + " · all-time PnL " + usd(w.allTimePnl, true) }, w.wallet.slice(0, 4) + "…" + w.wallet.slice(-4));
+      b.addEventListener("click", () => { walletIn.value = w.wallet; const c = store.get("lens2:w:" + w.wallet); if (c) { render(c); setStatus("Showing the saved analysis. Press Analyze to refresh."); } else setStatus("Press Analyze to study this wallet."); });
+      box.append(b);
+    }
+  }
+
+  function groupStats(rows) {
+    const closed = rows.filter((r) => !r.open);
+    return {
+      n: rows.length, open: rows.length - closed.length,
+      win: closed.length ? (closed.filter((r) => r.pnl > 0).length / closed.length) * 100 : NaN,
+      pnl: sum(rows, (r) => r.pnl), fees: sum(rows, (r) => r.fees), dep: sum(rows, (r) => r.dep),
+      width: median(rows.map((r) => r.widthPct)), hold: median(closed.map((r) => r.holdH)),
+    };
+  }
+
+  function fingerprint(d) {
+    const P = d.positions, C = P.filter((p) => !p.open);
+    if (!P.length) return ["This wallet has no Meteora DLMM positions."];
+    const out = [];
+    const byPair = d3.rollups(P, (v) => sum(v, (p) => p.dep), (p) => p.pair).sort((a, b) => b[1] - a[1]);
+    const depAll = sum(P, (p) => p.dep) || 1;
+    out.push("Focus: " + byPair.slice(0, 3).map(([k, v]) => k + " (" + pct((v / depAll) * 100) + " of money deposited)").join(", ") + (byPair.length > 3 ? ", plus " + (byPair.length - 3) + " more pairs." : "."));
+    const sides = d3.rollups(P, (v) => v.length, (p) => side(p.xShare)).sort((a, b) => b[1] - a[1]);
+    out.push("Deposit style: " + sides.map(([k, v]) => k.toLowerCase() + " " + pct((v / P.length) * 100)).join(", ") + ". Token-only ranges sit above the price and sell into pumps; quote-only ranges sit below and buy dips.");
+    out.push("Typical range: " + pct(median(P.map((p) => p.widthPct))) + " wide (median), about " + Math.round(median(P.map((p) => p.bins))) + " bins.");
+    if (C.length) {
+      const fast = C.filter((p) => p.holdH < 1).length / C.length, long = C.filter((p) => p.holdH > 24 * 7).length / C.length;
+      out.push("Holding: median " + hrs(median(C.map((p) => p.holdH))) + " per position; " + pct(fast * 100) + " closed within an hour, " + pct(long * 100) + " held over a week.");
+      const wins = C.filter((p) => p.pnl > 0), losses = C.filter((p) => p.pnl < 0);
+      const gw = sum(wins, (p) => p.pnl), gl = -sum(losses, (p) => p.pnl);
+      out.push("Results: wins " + pct((wins.length / C.length) * 100) + " of " + C.length + " closed positions; average win " + usd(wins.length ? gw / wins.length : 0) + ", average loss " + usd(losses.length ? -gl / losses.length : 0) + (gl > 0 ? "; profit factor " + (gw / gl).toFixed(2) + "." : "."));
+      const fees = sum(C, (p) => p.fees), pnl = sum(C, (p) => p.pnl);
+      out.push("Where profit comes from: " + usd(fees) + " in fees on closed positions against " + usd(pnl, true) + " total PnL, so price moves contributed " + usd(pnl - fees, true) + ".");
+    }
+    out.push("Sizing: median deposit " + usd(median(P.map((p) => p.dep))) + ", largest " + usd(d3.max(P, (p) => p.dep)) + ".");
+    const first = d3.min(P, (p) => p.openedAt), weeks = Math.max(1, (Date.now() / 1000 - first) / (7 * 86400));
+    out.push("Activity: " + (P.length / weeks).toFixed(1) + " new positions a week since " + day(first) + ".");
+    return out;
+  }
+
+  // ---------- rendering ----------
+  function el(tag, attrs, text) { const e = document.createElement(tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
+  function tile(label, value, sub, signClass) {
+    const t = el("div", { class: "tile" }); t.append(el("span", { class: "label" }, label));
+    const b = el("b", signClass ? { class: signClass } : {}, value); t.append(b);
+    if (sub) t.append(el("small", {}, sub)); return t;
+  }
+
+  function render(d) {
+    current = d; out.textContent = "";
+    const P = d.positions, C = P.filter((p) => !p.open), O = P.filter((p) => p.open), T = d.totals;
+    const g = groupStats(P);
+    const head = el("div", { class: "card" });
+    const h = el("h2", {}, d.wallet.slice(0, 6) + "…" + d.wallet.slice(-6));
+    const links = el("p", { class: "note" });
+    links.append("Read " + new Date(d.at).toLocaleString() + " from Meteora's public data. ");
+    const a1 = el("a", { href: "https://app.meteora.ag/portfolio/" + d.wallet, target: "_blank", rel: "noopener" }, "Meteora portfolio");
+    const a2 = el("a", { href: "https://app.lpagent.io/portfolio?address=" + d.wallet, target: "_blank", rel: "noopener" }, "LP Agent");
+    links.append(a1, " · ", a2);
+    head.append(h, links);
+    const pb = playbook(profile(d), P);
+    if (pb) { const pl = el("p", {}); pl.append(el("span", { class: "chip" }, pb[0]), " " + pb[1]); head.append(pl); }
+    if (d.scannedPools && d.totalPools > d.scannedPools) head.append(el("p", { class: "note" }, "Scanned the " + d.scannedPools + " most recent of " + d.totalPools + " pools. Realized PnL below is all-time; everything else uses the scanned positions."));
+    out.append(head);
+
+    const tiles = el("div", { class: "tiles" });
+    tiles.append(
+      tile("Realized PnL", usd(T.realized, true), T.closedCount + " closed positions", cls(T.realized)),
+      tile("Win rate", pct(g.win), "of closed positions"),
+      tile("Fees earned", usd(g.fees), "closed and open"),
+      tile("Open book", usd(T.openValue), O.length + " open · " + usd(T.unclaimed) + " unclaimed fees"),
+      tile("Open PnL", usd(T.openPnl, true), "as Meteora values it", cls(T.openPnl)),
+      tile("Median hold", hrs(g.hold), "closed positions"),
+    );
+    out.append(tiles);
+
+    const fp = el("div", { class: "card" }); fp.append(el("h2", {}, "Strategy fingerprint"));
+    const ul = el("ul", { class: "finger" }); for (const line of fingerprint(d)) ul.append(el("li", {}, line)); fp.append(ul);
+    const cap = num(capIn.value);
+    if (cap > 0 && T.openValue > 0) {
+      const ratio = cap / T.openValue, sizes = P.map((p) => p.dep * ratio);
+      const tooSmall = sizes.filter((s) => s < 10).length / (sizes.length || 1);
+      fp.append(el("p", { class: "note" }, "Copying at " + usd(cap) + ": you'd hold " + pct(ratio * 100, ratio < 0.01 ? 3 : 2) + " of their open book. Their median position would be about " + usd(median(sizes)) + " for you, and " + pct(tooSmall * 100) + " of their positions would fall under a $10 minimum."));
+    }
+    out.append(fp);
+    out.append(edgeChecklist(P));
+    out.append(scorecard(d));
+    out.append(edgeTests(P));
+
+    const two = el("div", { class: "two" });
+    const c1 = el("div", { class: "card" }); c1.append(el("h2", {}, "Realized PnL over time"), el("p", { class: "note" }, "Running total of closed positions, by close date."));
+    const ch1 = el("div", { class: "chart", id: "chart-pnl" }); c1.append(ch1);
+    const c2 = el("div", { class: "card" }); c2.append(el("h2", {}, "Range width vs hold time"), el("p", { class: "note" }, "Each dot is one position, sized by money deposited."));
+    const lg = el("div", { class: "legend" });
+    for (const [k, v] of [["Win", "--gain"], ["Loss", "--loss"], ["Open", "--open"]]) { const s = el("span"); const i = el("i"); i.style.background = "var(" + v + ")"; s.append(i, k); lg.append(s); }
+    const ch2 = el("div", { class: "chart", id: "chart-scatter" }); c2.append(lg, ch2);
+    two.append(c1, c2); out.append(two);
+
+    out.append(groupTable("By pair", P, (p) => p.pair, "Pair"));
+    out.append(groupTable("By deposit style", P, (p) => side(p.xShare), "Style"));
+    if (O.length) out.append(openTable(O));
+    out.append(ledger(P));
+
+    drawPnl(ch1, C); drawScatter(ch2, P);
+  }
+
+  function groupTable(title, P, key, keyLabel) {
+    const card = el("div", { class: "card" }); card.append(el("h2", {}, title));
+    const rows = d3.rollups(P, groupStats, key).map(([k, s]) => ({ k, ...s })).sort((a, b) => b.dep - a.dep);
+    const cols = [[keyLabel, (r) => r.k, (r) => r.k], ["Positions", (r) => r.n + (r.open ? " (" + r.open + " open)" : ""), (r) => r.n],
+      ["Win rate", (r) => pct(r.win), (r) => r.win], ["Deposited", (r) => usd(r.dep), (r) => r.dep], ["Fees", (r) => usd(r.fees), (r) => r.fees],
+      ["PnL", (r) => usd(r.pnl, true), (r) => r.pnl, true], ["Median width", (r) => pct(r.width), (r) => r.width], ["Median hold", (r) => hrs(r.hold), (r) => r.hold]];
+    card.append(sortable(rows, cols, 3));
+    return card;
+  }
+
+  function openTable(O) {
+    const card = el("div", { class: "card" }); card.append(el("h2", {}, "Open positions"), el("p", { class: "note" }, "The marker shows where the pool price sits inside each range today."));
+    const cols = [["Pair", (r) => r.pair, (r) => r.pair], ["Age", (r) => hrs(r.holdH), (r) => r.holdH], ["Deposited", (r) => usd(r.dep), (r) => r.dep],
+      ["Range", (r) => fmtPrice(r.minP) + " – " + fmtPrice(r.maxP), (r) => r.widthPct], ["Price in range", null, (r) => posIn(r), false, (td, r) => rangeBar(td, r)],
+      ["Style", (r) => side(r.xShare), (r) => r.xShare], ["Fees", (r) => usd(r.fees), (r) => r.fees], ["PnL", (r) => usd(r.pnl, true), (r) => r.pnl, true]];
+    card.append(sortable(O, cols, 2));
+    return card;
+  }
+
+  function ledger(P) {
+    const card = el("div", { class: "card" }); card.append(el("h2", {}, "Every position"), el("p", { class: "note" }, "Click a column to sort."));
+    const cols = [["Pair", (r) => r.pair, (r) => r.pair], ["Opened", (r) => day(r.openedAt), (r) => r.openedAt], ["Held", (r) => hrs(r.holdH) + (r.open ? " ·open" : ""), (r) => r.holdH],
+      ["Deposited", (r) => usd(r.dep), (r) => r.dep], ["Width", (r) => pct(r.widthPct), (r) => r.widthPct], ["Bins", (r) => String(r.bins), (r) => r.bins],
+      ["Style", (r) => side(r.xShare), (r) => r.xShare], ["Fees", (r) => usd(r.fees), (r) => r.fees], ["PnL", (r) => usd(r.pnl, true), (r) => r.pnl, true],
+      ["PnL %", (r) => pct(r.pnlPct, 1), (r) => r.pnlPct, true], ["Position", (r) => r.id.slice(0, 4) + "…" + r.id.slice(-4), (r) => r.id, false, null, (r) => "https://solscan.io/account/" + r.id]];
+    card.append(sortable(P, cols, 1));
+    return card;
+  }
+
+  const fmtPrice = (v) => (v >= 100 ? v.toFixed(1) : v >= 1 ? v.toFixed(3) : v >= 0.001 ? v.toFixed(5) : v.toPrecision(3));
+  const posIn = (r) => (r.maxP > r.minP ? (r.price - r.minP) / (r.maxP - r.minP) : NaN);
+  function rangeBar(td, r) {
+    const f = posIn(r), b = el("span", { class: "rng" + (f < 0 || f > 1 ? " out" : ""), title: Number.isFinite(f) ? pct(f * 100) + " of the way up the range" : "" });
+    const i = el("i"); i.style.left = "calc(" + Math.min(100, Math.max(0, (f || 0) * 100)) + "% - 1.5px)"; b.append(i); td.append(b);
+  }
+
+  // cols: [label, text(r), sortValue(r), signed?, custom(td, r)?, href(r)?]
+  function sortable(rows, cols, defaultCol) {
+    const wrap = el("div", { class: "scroll" }), table = el("table"), thead = el("thead"), tbody = el("tbody"), tr = el("tr");
+    let sortCol = defaultCol, dir = -1;
+    cols.forEach((c, i) => {
+      const th = el("th", { tabindex: "0", scope: "col" }, c[0]);
+      const act = () => { dir = sortCol === i ? -dir : -1; sortCol = i; draw(); };
+      th.addEventListener("click", act); th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); } });
+      tr.append(th);
+    });
+    thead.append(tr); table.append(thead, tbody); wrap.append(table);
+    function draw() {
+      [...tr.children].forEach((th, i) => th.setAttribute("aria-sort", i === sortCol ? (dir > 0 ? "ascending" : "descending") : "none"));
+      const f = cols[sortCol][2];
+      const sorted = [...rows].sort((a, b) => { const x = f(a), y = f(b); const bad = (v) => v == null || (typeof v === "number" && !Number.isFinite(v)); if (bad(x)) return 1; if (bad(y)) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
+      tbody.textContent = "";
+      for (const r of sorted) {
+        const row = el("tr");
+        cols.forEach((c, i) => {
+          const td = el("td", i === cols.length - 1 && c[5] ? { class: "mono" } : {});
+          if (c[4]) c[4](td, r);
+          else if (c[5]) td.append(el("a", { href: c[5](r), target: "_blank", rel: "noopener" }, c[1](r)));
+          else td.textContent = c[1](r);
+          if (c[3]) td.className = cls(c[2](r));
+          row.append(td);
+        });
+        tbody.append(row);
+      }
+    }
+    draw();
+    return wrap;
+  }
+
+  function tooltip(container) {
+    const tip = el("div", { class: "tip" }); tip.hidden = true; container.append(tip);
+    return {
+      show(lines, x, y) {
+        tip.textContent = ""; lines.forEach((l, i) => { if (i) tip.append(el("br")); tip.append(l); }); tip.hidden = false;
+        const w = container.clientWidth, tw = tip.offsetWidth, th = tip.offsetHeight;
+        tip.style.left = Math.min(Math.max(0, x + 12), Math.max(0, w - tw)) + "px";
+        tip.style.top = Math.max(0, y - th - 10) + "px";
+      },
+      hide() { tip.hidden = true; },
+    };
+  }
+
+  function drawPnl(container, C) {
+    container.querySelectorAll("svg,.tip,.empty").forEach((n) => n.remove());
+    if (!C.length) { container.append(el("p", { class: "note" }, "No closed positions yet.")); return; }
+    const W = Math.max(300, container.clientWidth), H = 260, m = { t: 12, r: 16, b: 26, l: 58 };
+    const s = [...C].sort((a, b) => a.closedAt - b.closedAt); let run = 0;
+    const pts = s.map((p) => ({ t: new Date(p.closedAt * 1000), v: (run += p.pnl), p }));
+    const x = d3.scaleTime().domain(d3.extent(pts, (d) => d.t)).range([m.l, W - m.r]);
+    if (pts.length === 1) x.domain([d3.timeDay.offset(pts[0].t, -1), d3.timeDay.offset(pts[0].t, 1)]);
+    const y = d3.scaleLinear().domain(d3.extent([0, ...pts.map((d) => d.v)])).nice().range([H - m.b, m.t]);
+    const svg = d3.select(container).append("svg").attr("viewBox", `0 0 ${W} ${H}`).attr("width", "100%").attr("role", "img").attr("aria-label", "Cumulative realized PnL");
+    svg.append("g").attr("class", "grid").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(5).tickSize(-(W - m.l - m.r)).tickFormat((v) => usd(v))).call((g) => g.select(".domain").remove());
+    svg.append("g").attr("transform", `translate(0,${H - m.b})`).call(d3.axisBottom(x).ticks(Math.max(2, Math.floor(W / 110))).tickSizeOuter(0));
+    const color = run >= 0 ? "var(--gain)" : "var(--loss)";
+    svg.append("path").datum(pts).attr("fill", color).attr("fill-opacity", 0.12).attr("d", d3.area().curve(d3.curveStepAfter).x((d) => x(d.t)).y0(y(0)).y1((d) => y(d.v)));
+    svg.append("path").datum(pts).attr("fill", "none").attr("stroke", color).attr("stroke-width", 2).attr("d", d3.line().curve(d3.curveStepAfter).x((d) => x(d.t)).y((d) => y(d.v)));
+    svg.append("line").attr("x1", m.l).attr("x2", W - m.r).attr("y1", y(0)).attr("y2", y(0)).attr("stroke", "var(--muted)").attr("stroke-dasharray", "3 3");
+    const last = pts[pts.length - 1];
+    svg.append("circle").attr("cx", x(last.t)).attr("cy", y(last.v)).attr("r", 4).attr("fill", color);
+    const tip = tooltip(container), dot = svg.append("circle").attr("r", 4).attr("fill", "var(--accent)").attr("display", "none");
+    svg.append("rect").attr("x", m.l).attr("y", m.t).attr("width", W - m.l - m.r).attr("height", H - m.t - m.b).attr("fill", "transparent")
+      .on("pointermove", (ev) => {
+        const [mx] = d3.pointer(ev), t = x.invert(mx), i = Math.min(pts.length - 1, d3.bisector((d) => d.t).center(pts, t)), d = pts[i];
+        dot.attr("display", null).attr("cx", x(d.t)).attr("cy", y(d.v));
+        const scale = container.clientWidth / W;
+        tip.show([d.p.pair + " closed " + day(d.p.closedAt), "This position " + usd(d.p.pnl, true), "Running total " + usd(d.v, true)], x(d.t) * scale, y(d.v) * scale);
+      })
+      .on("pointerleave", () => { tip.hide(); dot.attr("display", "none"); });
+  }
+
+  function drawScatter(container, P) {
+    container.querySelectorAll("svg,.tip").forEach((n) => n.remove());
+    const D = P.filter((p) => p.widthPct > 0 && p.holdH > 0);
+    if (!D.length) { container.append(el("p", { class: "note" }, "Not enough data to plot.")); return; }
+    const W = Math.max(300, container.clientWidth), H = 260, m = { t: 12, r: 16, b: 34, l: 52 };
+    const x = d3.scaleLog().domain(d3.extent(D, (p) => p.holdH)).nice().range([m.l, W - m.r]);
+    const y = d3.scaleLog().domain(d3.extent(D, (p) => p.widthPct)).nice().range([H - m.b, m.t]);
+    const r = d3.scaleSqrt().domain([0, d3.max(D, (p) => p.dep) || 1]).range([2.5, 16]);
+    const svg = d3.select(container).append("svg").attr("viewBox", `0 0 ${W} ${H}`).attr("width", "100%").attr("role", "img").attr("aria-label", "Range width against hold time");
+    svg.append("g").attr("class", "grid").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(4, (v) => pct(v)).tickSize(-(W - m.l - m.r))).call((g) => g.select(".domain").remove());
+    const [lo, hi] = x.domain(), holdTicks = [1 / 60, 0.25, 1, 4, 24, 168, 720, 8760].filter((v) => v >= lo && v <= hi);
+    svg.append("g").attr("transform", `translate(0,${H - m.b})`).call(d3.axisBottom(x).tickValues(holdTicks).tickFormat(hrs).tickSizeOuter(0));
+    svg.append("text").attr("x", W - m.r).attr("y", H - 4).attr("text-anchor", "end").text("hold time");
+    svg.append("text").attr("x", m.l).attr("y", m.t - 2).attr("text-anchor", "start").attr("dy", "-0.2em").text("range width");
+    const fill = (p) => (p.open ? "var(--open)" : p.pnl > 0 ? "var(--gain)" : "var(--loss)");
+    const tip = tooltip(container), scale = () => container.clientWidth / W;
+    svg.append("g").selectAll("circle").data([...D].sort((a, b) => b.dep - a.dep)).join("circle")
+      .attr("cx", (p) => x(p.holdH)).attr("cy", (p) => y(p.widthPct)).attr("r", (p) => r(p.dep))
+      .attr("fill", fill).attr("fill-opacity", 0.55).attr("stroke", fill)
+      .on("pointerenter", (ev, p) => tip.show([p.pair + (p.open ? " (open)" : ""), "Width " + pct(p.widthPct) + " · held " + hrs(p.holdH), "Deposited " + usd(p.dep) + " · PnL " + usd(p.pnl, true)], x(p.holdH) * scale(), y(p.widthPct) * scale()))
+      .on("pointerleave", () => tip.hide());
+  }
+
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { if (current) { drawPnl($("#chart-pnl"), current.positions.filter((p) => !p.open)); drawScatter($("#chart-scatter"), current.positions); } }, 150); });
+
+  // ---------- recent wallets ----------
+  function renderRecent() {
+    const box = $("#recent"), list = store.get("lens2:recent") || [];
+    box.querySelectorAll("button").forEach((b) => b.remove());
+    box.hidden = !list.length;
+    for (const w of list) {
+      const b = el("button", { type: "button", class: "ghost" }, w.slice(0, 4) + "…" + w.slice(-4));
+      b.addEventListener("click", () => { walletIn.value = w; const c = store.get("lens2:w:" + w); if (c) { render(c); setStatus("Showing the saved analysis from " + new Date(c.at).toLocaleString() + ". Press Analyze to refresh."); } });
+      box.append(b);
+    }
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const w = walletIn.value.trim();
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w)) { setStatus("That doesn't look like a Solana wallet address (32–44 letters and digits).", true); return; }
+    goBtn.disabled = true;
+    try {
+      const d = await analyze(w, Math.min(400, Math.max(5, Math.round(num(maxIn.value)) || 100)));
+      store.set("lens2:w:" + w, d);
+      store.set("lens2:recent", [w, ...(store.get("lens2:recent") || []).filter((x) => x !== w)].slice(0, 6));
+      render(d); renderRecent();
+      setStatus(d.positions.length ? "Analyzed " + d.positions.length + " positions." : "This wallet has no Meteora DLMM positions.");
+    } catch (err) {
+      setStatus(explain(err), true);
+    } finally { goBtn.disabled = false; setProgress(null); }
+  });
+
+  capIn.addEventListener("change", () => { if (current) render(current); });
+
+  renderRecent(); renderTopLps();
+  const last =(store.get("lens2:recent") || [])[0], cached = last && store.get("lens2:w:" + last);
+  if (cached) { walletIn.value = last; render(cached); setStatus("Showing your last analysis from " + new Date(cached.at).toLocaleString() + ". Press Analyze to refresh."); }
+})();
+</script>
+
+</body>
+</html>
